@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+from typing import Optional, List 
 from datetime import datetime
 from typing import List
 
@@ -71,12 +71,11 @@ class Task(BaseModel):
     completed_at: Optional[str] = None
 
 class TaskCreate(BaseModel):
-    title: str
-    description: str
-    posted_by: str  # from user
-    tags: List[str]
-    location: Optional[str]
-    time: Optional[str]
+    title: str = Field(..., min_length=5, max_length=100, description="Short but descriptive title")
+    description: str = Field(..., min_length=10, max_length=500, description="Explain the task clearly")
+    tags: List[str] = Field(..., min_items=1, description="At least one relevant tag is required")
+    location: Optional[str] = Field(None, min_length=2, max_length=100)
+    time: Optional[str] = Field(None, description="Optional preferred time for the task")
 
 class TaskAction(BaseModel):
     user_id: str

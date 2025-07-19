@@ -6,6 +6,5 @@ async def get_current_user(request: Request):
     user_id = request.headers.get("x-user-id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Missing or invalid authentication")
-    
-    request.state.user_id = user_id
-    return user_id
+
+    return {"id": user_id}
