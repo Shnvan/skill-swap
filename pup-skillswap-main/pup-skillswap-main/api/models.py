@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from datetime import datetime
+from typing import List
 
 # ---------- User ----------
 class UserProfile(BaseModel):
@@ -52,3 +53,30 @@ class ReportCreate(BaseModel):
     to_user: str
     reason: str
     details: str
+
+
+# ---------- Task ----------
+class Task(BaseModel):
+    task_id: str
+    title: str
+    description: str
+    posted_by: str
+    tags: List[str]
+    location: Optional[str]
+    time: Optional[str]
+    timestamp: str
+    status: str
+    accepted_by: Optional[str] = None
+    accepted_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+class TaskCreate(BaseModel):
+    title: str
+    description: str
+    posted_by: str  # from user
+    tags: List[str]
+    location: Optional[str]
+    time: Optional[str]
+
+class TaskAction(BaseModel):
+    user_id: str

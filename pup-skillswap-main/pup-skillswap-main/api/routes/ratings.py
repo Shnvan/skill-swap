@@ -6,22 +6,27 @@ from boto3.dynamodb.conditions import Key, Attr
 
 from api.models import RatingCreate, Rating  
 from api.db import rating_table
+from fastapi import Depends
+from .auth import get_current_user
+
 
 router = APIRouter(prefix="/ratings", tags=["Ratings"])
 
 
 # Submit a rating
 @router.post("/", response_model=Rating)
-def create_rating(rating: RatingCreate):
+def create_rating(rating: RatingCreate, user_id: str = Depends(get_current_user)):
     try:
         item = rating.dict()
         item["rating_id"] = str(uuid4())
         item["timestamp"] = datetime.utcnow().isoformat()
         item["is_flagged"] = False
+        item["from_user"] = user_id  # override client-supplied value
         rating_table.put_item(Item=item)
         return item
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # Get ratings received by a user

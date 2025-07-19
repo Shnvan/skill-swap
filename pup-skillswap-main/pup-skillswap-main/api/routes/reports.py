@@ -5,17 +5,21 @@ from typing import List
 
 from api.models import ReportCreate, Report
 from api.db import report_table
+from fastapi import Depends
+from .auth import get_current_user
+
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
 
 # Submit a report
 @router.post("/", response_model=Report)
-def submit_report(report: ReportCreate):
+def submit_report(report: ReportCreate, user_id: str = Depends(get_current_user)):
     try:
         item = report.dict()
         item["report_id"] = str(uuid4())
         item["timestamp"] = datetime.utcnow().isoformat()
+        item["from_user"] = user_id  # override
         report_table.put_item(Item=item)
         return item
     except Exception as e:

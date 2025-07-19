@@ -15,3 +15,5 @@ s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION"))
 user_table = dynamodb.Table(os.getenv("USER_TABLE_NAME"))
 rating_table = dynamodb.Table(os.getenv("RATING_TABLE_NAME"))
 report_table = dynamodb.Table(os.getenv("REPORT_TABLE_NAME"))
+task_table = dynamodb.Table(os.getenv("TASK_TABLE_NAME"))
+
