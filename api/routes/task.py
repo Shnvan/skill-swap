@@ -12,32 +12,35 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
-
 
 # ---------- Create Task (Requires Auth) ----------
 @router.post("/", response_model=Task)
 def create_task(task: TaskCreate, user=Depends(get_current_user)):
     user_id = user["id"]
+    
+    # Basic Validation for required fields
+    if not task.title or not task.description:
+        raise HTTPException(status_code=400, detail="Title and description are required")
 
     try:
         logger.info(f"[CREATE] User '{user_id}' is creating a task with title: '{task.title}'")
-
+        
         task_id = str(uuid4())
         item = task.dict()
         item["task_id"] = task_id
         item["timestamp"] = datetime.utcnow().isoformat()
         item["status"] = "POSTED"
         item["posted_by"] = user_id
+        
+        # Insert the task into DynamoDB
         task_table.put_item(Item=item)
 
         logger.info(f"[SUCCESS] Task '{task_id}' created by user '{user_id}'")
         return item
     except Exception as e:
         logger.error(f"[ERROR] Failed to create task: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        raise HTTPException(status_code=500, detail="Failed to create task")
 
 # ---------- List Tasks (Open to Public) ----------
 @router.get("/", response_model=List[Task])
@@ -45,6 +48,7 @@ def list_tasks(tag: Optional[str] = None, location: Optional[str] = None):
     try:
         logger.info(f"[LIST] Fetching tasks - Filter by tag='{tag}' location='{location}'")
         
+        # Use scan, but we can improve this later with GSIs
         scan_filter = Attr("status").eq("POSTED")
         if tag:
             scan_filter &= Attr("tags").contains(tag)
@@ -53,12 +57,12 @@ def list_tasks(tag: Optional[str] = None, location: Optional[str] = None):
 
         response = task_table.scan(FilterExpression=scan_filter)
         tasks = response.get("Items", [])
+        
         logger.info(f"[LIST] {len(tasks)} task(s) returned")
         return tasks
     except Exception as e:
         logger.error(f"[ERROR] Failed to list tasks: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        raise HTTPException(status_code=500, detail="Failed to list tasks")
 
 # ---------- Get Task Details (Open to Public) ----------
 @router.get("/{task_id}", response_model=Task)
@@ -76,8 +80,7 @@ def get_task(task_id: str):
         return item
     except Exception as e:
         logger.error(f"[ERROR] Failed to fetch task '{task_id}': {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        raise HTTPException(status_code=500, detail="Failed to fetch task")
 
 # ---------- Accept Task (Requires Auth) ----------
 @router.post("/{task_id}/accept", response_model=Task)
@@ -92,21 +95,23 @@ def accept_task(task_id: str, user=Depends(get_current_user)):
         if not item:
             logger.warning(f"[NOT FOUND] Task ID '{task_id}' not found for acceptance")
             raise HTTPException(status_code=404, detail="Task not found")
+        
+        # Check if the task is in 'POSTED' status before accepting
         if item["status"] != "POSTED":
             logger.warning(f"[INVALID] Task '{task_id}' is not available for acceptance")
-            raise HTTPException(status_code=400, detail="Task already accepted")
+            raise HTTPException(status_code=400, detail="Task already accepted or completed")
 
         item["status"] = "IN_PROGRESS"
         item["accepted_by"] = user_id
         item["accepted_at"] = datetime.utcnow().isoformat()
+
         task_table.put_item(Item=item)
 
         logger.info(f"[SUCCESS] Task '{task_id}' accepted by user '{user_id}'")
         return item
     except Exception as e:
         logger.error(f"[ERROR] Failed to accept task '{task_id}': {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        raise HTTPException(status_code=500, detail="Failed to accept task")
 
 # ---------- Complete Task (Requires Auth + Ownership) ----------
 @router.post("/{task_id}/complete", response_model=Task)
@@ -121,19 +126,24 @@ def complete_task(task_id: str, user=Depends(get_current_user)):
         if not item:
             logger.warning(f"[NOT FOUND] Task ID '{task_id}' not found for completion")
             raise HTTPException(status_code=404, detail="Task not found")
+        
+        # Check if the task is in 'IN_PROGRESS' status before completing
         if item["status"] != "IN_PROGRESS":
             logger.warning(f"[INVALID] Task '{task_id}' is not in progress")
-            raise HTTPException(status_code=400, detail="Task not in progress")
+            raise HTTPException(status_code=400, detail="Task must be in progress to be completed")
+        
+        # Only the user who accepted the task can complete it
         if item.get("accepted_by") != user_id:
             logger.warning(f"[UNAUTHORIZED] User '{user_id}' is not allowed to complete task '{task_id}'")
             raise HTTPException(status_code=403, detail="Only the accepted user can complete this task")
 
         item["status"] = "COMPLETED"
         item["completed_at"] = datetime.utcnow().isoformat()
+
         task_table.put_item(Item=item)
 
         logger.info(f"[SUCCESS] Task '{task_id}' completed by user '{user_id}'")
         return item
     except Exception as e:
         logger.error(f"[ERROR] Failed to complete task '{task_id}': {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to complete task")
