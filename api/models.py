@@ -1,29 +1,27 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, List 
+from typing import Optional, List
+from typing_extensions import Annotated
 from datetime import datetime
-from typing import List
 
 # ---------- User ----------
-class UserProfile(BaseModel):
-    id: str
-    full_name: str
-    email: EmailStr
-    skill: str
-    bio: Optional[str] = None
-    is_active: bool = True
+UserName = Annotated[str, Field(min_length=2, max_length=100)]
+UserSkill = Annotated[str, Field(min_length=2, max_length=50)]
+UserBio = Annotated[Optional[str], Field(max_length=250)]
 
-# ---------- Create User (Input) ----------
 class UserCreate(BaseModel):
-    full_name: str
+    full_name: UserName
     email: EmailStr
-    skill: str
-    bio: Optional[str] = None
+    skill: UserSkill
+    bio: UserBio = None
 
-# ---------- Update User ----------
 class UserUpdate(BaseModel):
-    full_name: Optional[str] = None
-    skill: Optional[str] = None
-    bio: Optional[str] = None
+    full_name: Optional[UserName] = None
+    skill: Optional[UserSkill] = None
+    bio: UserBio = None
+
+class UserProfile(UserCreate):
+    id: str
+    is_active: bool
 
 # ---------- Rating ----------
 class RatingBase(BaseModel):
@@ -53,7 +51,6 @@ class ReportCreate(BaseModel):
     to_user: str
     reason: str
     details: str
-
 
 # ---------- Task ----------
 class Task(BaseModel):

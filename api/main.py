@@ -10,10 +10,6 @@ app = FastAPI(
     description="PUP SkillSwap"
 )
 
-
-# --------------------
-
-
 # --------------------
 # MIDDLEWARES (CORS)
 # --------------------
@@ -28,9 +24,10 @@ app.add_middleware(
 # --------------------
 # INCLUDE ROUTERS
 # --------------------
-app.include_router(users.router, prefix="/users", tags=["Users"])
-app.include_router(ratings.router, prefix="/ratings", tags=["Ratings"])
-app.include_router(reports.router, prefix="/reports", tags=["Reports"])
+app.include_router(users.router)
+app.include_router(ratings.router)
+app.include_router(reports.router)
+app.include_router(task.router)
 
 # --------------------
 # ROOT + HEALTH
