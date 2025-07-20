@@ -1,89 +1,153 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List
+from typing import List, Optional
 from uuid import uuid4
 from datetime import datetime
+from boto3.dynamodb.conditions import Attr 
+from api.models import TaskCreate, Task, TaskAction, TaskOut
+from api.db import task_table
+from api.routes.auth import get_current_user_id
 
-from boto3.dynamodb.conditions import Key, Attr
+router = APIRouter(
+    prefix="/tasks",
+    tags=["Tasks"]
+)
 
-from api.models import RatingCreate, Rating
-from api.db import rating_table
-from .auth import get_current_user
+# 🔧 Helper to convert DynamoDB item to dict
+def serialize_task(item):
+    task = item["Item"] if "Item" in item else item
+    return {
+        "task_id": task["task_id"],
+        "title": task["title"],
+        "description": task["description"],
+        "posted_by": task["posted_by"],
+        "tags": task.get("tags", []),
+        "location": task.get("location"),
+        "time": task.get("time"),
+        "timestamp": task["timestamp"],
+        "status": task.get("status", "open"),
+        "accepted_by": task.get("accepted_by"),
+        "accepted_at": task.get("accepted_at"),
+        "completed_at": task.get("completed_at"),
+    }
 
-router = APIRouter(prefix="/ratings", tags=["Ratings"])
+# 📝 Create a new task
+@router.post("/", response_model=Task)
+def create_task(task: TaskCreate, user_id: str = Depends(get_current_user_id)):
+    task_id = str(uuid4())
+    timestamp = datetime.utcnow().isoformat()
 
-# Placeholder: Implement this function to check if user participated in the task
-def user_participated_in_task(user_id: str, task_id: str) -> bool:
-    # You need to query your task database to confirm user involvement
-    # Return True if user created or accepted/completed the task
-    return True  # <-- Replace with real logic
+    item = {
+        "task_id": task_id,
+        "title": task.title,
+        "description": task.description,
+        "tags": task.tags,
+        "location": task.location,
+        "time": task.time,
+        "timestamp": timestamp,
+        "posted_by": user_id,
+        "status": "open",
+    }
 
-@router.post("/", response_model=Rating)
-def create_rating(rating: RatingCreate, from_user: str = Depends(get_current_user)):
-    if not user_participated_in_task(from_user, rating.task_id):
-        raise HTTPException(status_code=403, detail="You can only rate users for tasks you participated in.")
-
-    # Check if user already rated this user for this task
-    existing_rating = rating_table.scan(
-        FilterExpression=Attr("from_user").eq(from_user) &
-                         Attr("to_user").eq(rating.to_user) &
-                         Attr("task_id").eq(rating.task_id)
-    )
-    if existing_rating.get("Items"):
-        raise HTTPException(status_code=400, detail="You have already rated this user for this task.")
-
-    item = rating.dict()
-    item["rating_id"] = str(uuid4())
-    item["timestamp"] = datetime.utcnow().isoformat()
-    item["is_flagged"] = False
-    item["from_user"] = from_user  # override client-supplied
-
+    task_table.put_item(Item=item)
+    return serialize_task(item)
+# 📝 List all tasks with optional filters
+@router.get("/", response_model=List[TaskOut])
+def list_tasks(
+    user_id: Optional[str] = None,
+    role: Optional[str] = None,
+    sort: Optional[bool] = True,
+    include_cancelled: Optional[bool] = False  # NEW param
+):
     try:
-        rating_table.put_item(Item=item)
-        return item
+        # Default filter
+        if not include_cancelled:
+            filter_expr = Attr("status").ne("cancelled")
+        else:
+            filter_expr = Attr("status").exists()  # No filter on status
+
+        # Role-based filters
+        if role == "posted" and user_id:
+            filter_expr &= Attr("posted_by").eq(user_id)
+        elif role == "accepted" and user_id:
+            filter_expr &= Attr("accepted_by").eq(user_id)
+        elif role is None and user_id is None:
+            # Only filter for open if no role/user provided
+            filter_expr &= Attr("status").eq("open")
+
+        # Fetch tasks
+        response = task_table.scan(FilterExpression=filter_expr)
+        tasks = response.get("Items", [])
+
+        # Sort if needed
+        if sort:
+            tasks = sorted(tasks, key=lambda x: x["timestamp"], reverse=True)
+
+        return [serialize_task(t) for t in tasks]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/to/{user_id}", response_model=List[Rating])
-def get_ratings_for_user(user_id: str):
+# ✅ Accept a task
+@router.post("/{task_id}/accept", response_model=Task)
+def accept_task(task_id: str, action: TaskAction, user_id: str = Depends(get_current_user_id)):
+    response = task_table.get_item(Key={"task_id": task_id})
+    if "Item" not in response:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task = response["Item"]
+    if task["status"] != "open":
+        raise HTTPException(status_code=400, detail="Task is already accepted or completed")
+
+    task["status"] = "accepted"
+    task["accepted_by"] = user_id
+    task["accepted_at"] = datetime.utcnow().isoformat()
+
+    task_table.put_item(Item=task)
+    return serialize_task(task)
+
+# ✅ Complete a task
+@router.post("/{task_id}/complete", response_model=Task)
+def complete_task(task_id: str, user_id: str = Depends(get_current_user_id)):
+    response = task_table.get_item(Key={"task_id": task_id})
+    if "Item" not in response:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task = response["Item"]
+    if task.get("status") != "accepted" or task.get("accepted_by") != user_id:
+        raise HTTPException(status_code=403, detail="Not allowed to complete this task")
+
+    task["status"] = "completed"
+    task["completed_at"] = datetime.utcnow().isoformat()
+
+    task_table.put_item(Item=task)
+    return serialize_task(task)
+
+# Get task by Task_id
+@router.get("/{task_id}", response_model=Task)
+def get_task(task_id: str):
+    response = task_table.get_item(Key={"task_id": task_id})
+    task = response.get("Item")
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    return serialize_task(task)
+
+# cancel a task
+@router.post("/{task_id}/cancel")
+def cancel_task(task_id: str, action: TaskAction):
     try:
-        # Consider replacing scan with query if you add a GSI on to_user
-        response = rating_table.scan(
-            FilterExpression=Attr("to_user").eq(user_id) & Attr("is_flagged").eq(False)
+        task = task_table.get_item(Key={"task_id": task_id}).get("Item")
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task["posted_by"] != action.user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized to cancel this task")
+        
+        task_table.update_item(
+            Key={"task_id": task_id},
+            UpdateExpression="SET #status = :cancelled",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":cancelled": "cancelled"}
         )
-        return response.get("Items", [])
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/average/{user_id}")
-def get_average_rating(user_id: str):
-    try:
-        response = rating_table.scan(
-            FilterExpression=Attr("to_user").eq(user_id) & Attr("is_flagged").eq(False)
-        )
-        ratings = response.get("Items", [])
-        if not ratings:
-            return {"user_id": user_id, "average_rating": None, "count": 0}
-        total = sum(r["rating"] for r in ratings)
-        count = len(ratings)
-        avg = total / count
-        return {"user_id": user_id, "average_rating": avg, "count": count}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.put("/{rating_id}/flag")
-def flag_rating(rating_id: str, reason: str = "Inappropriate content", flagged_by: str = Depends(get_current_user)):
-    try:
-        response = rating_table.get_item(Key={"rating_id": rating_id})
-        item = response.get("Item")
-        if not item:
-            raise HTTPException(status_code=404, detail="Rating not found")
-
-        item["is_flagged"] = True
-        item["flag_reason"] = reason
-        item["flagged_by"] = flagged_by
-        item["flagged_at"] = datetime.utcnow().isoformat()
-
-        rating_table.put_item(Item=item)
-        return {"message": "Rating flagged", "reason": reason}
+        return {"message": "Task cancelled"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
