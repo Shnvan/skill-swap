@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Optional
 from uuid import uuid4
 from datetime import datetime
-from boto3.dynamodb.conditions import Attr 
+from boto3.dynamodb.conditions import Attr
 from api.models import TaskCreate, Task, TaskAction, TaskOut
 from api.db import task_table
 from api.routes.auth import get_current_user_id
@@ -12,7 +12,7 @@ router = APIRouter(
     tags=["Tasks"]
 )
 
-# 🔧 Helper to convert DynamoDB item to dict
+# 🔧 Helper to serialize DynamoDB item
 def serialize_task(item):
     task = item["Item"] if "Item" in item else item
     return {
@@ -32,7 +32,7 @@ def serialize_task(item):
 
 # 📝 Create a new task
 @router.post("/", response_model=Task)
-def create_task(task: TaskCreate, user_id: str = Depends(get_current_user_id)):
+async def create_task(task: TaskCreate, user_id: str = Depends(get_current_user_id)):
     task_id = str(uuid4())
     timestamp = datetime.utcnow().isoformat()
 
@@ -50,35 +50,31 @@ def create_task(task: TaskCreate, user_id: str = Depends(get_current_user_id)):
 
     task_table.put_item(Item=item)
     return serialize_task(item)
-# 📝 List all tasks with optional filters
+
+# 📋 List tasks with optional filters
 @router.get("/", response_model=List[TaskOut])
 def list_tasks(
     user_id: Optional[str] = None,
     role: Optional[str] = None,
     sort: Optional[bool] = True,
-    include_cancelled: Optional[bool] = False  # NEW param
+    include_cancelled: Optional[bool] = False
 ):
     try:
-        # Default filter
         if not include_cancelled:
             filter_expr = Attr("status").ne("cancelled")
         else:
-            filter_expr = Attr("status").exists()  # No filter on status
+            filter_expr = Attr("status").exists()
 
-        # Role-based filters
         if role == "posted" and user_id:
             filter_expr &= Attr("posted_by").eq(user_id)
         elif role == "accepted" and user_id:
             filter_expr &= Attr("accepted_by").eq(user_id)
         elif role is None and user_id is None:
-            # Only filter for open if no role/user provided
             filter_expr &= Attr("status").eq("open")
 
-        # Fetch tasks
         response = task_table.scan(FilterExpression=filter_expr)
         tasks = response.get("Items", [])
 
-        # Sort if needed
         if sort:
             tasks = sorted(tasks, key=lambda x: x["timestamp"], reverse=True)
 
@@ -88,7 +84,7 @@ def list_tasks(
 
 # ✅ Accept a task
 @router.post("/{task_id}/accept", response_model=Task)
-def accept_task(task_id: str, action: TaskAction, user_id: str = Depends(get_current_user_id)):
+async def accept_task(task_id: str, action: TaskAction, user_id: str = Depends(get_current_user_id)):
     response = task_table.get_item(Key={"task_id": task_id})
     if "Item" not in response:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -106,7 +102,7 @@ def accept_task(task_id: str, action: TaskAction, user_id: str = Depends(get_cur
 
 # ✅ Complete a task
 @router.post("/{task_id}/complete", response_model=Task)
-def complete_task(task_id: str, user_id: str = Depends(get_current_user_id)):
+async def complete_task(task_id: str, user_id: str = Depends(get_current_user_id)):
     response = task_table.get_item(Key={"task_id": task_id})
     if "Item" not in response:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -121,7 +117,23 @@ def complete_task(task_id: str, user_id: str = Depends(get_current_user_id)):
     task_table.put_item(Item=task)
     return serialize_task(task)
 
-# Get task by Task_id
+# ❌ Cancel a task
+@router.post("/{task_id}/cancel", response_model=Task)
+def cancel_task(task_id: str, user_id: str = Depends(get_current_user_id)):
+    try:
+        task = task_table.get_item(Key={"task_id": task_id}).get("Item")
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task["posted_by"] != user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized to cancel this task")
+
+        task["status"] = "cancelled"
+        task_table.put_item(Item=task)
+        return serialize_task(task)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+# 🔍 Get task by ID
 @router.get("/{task_id}", response_model=Task)
 def get_task(task_id: str):
     response = task_table.get_item(Key={"task_id": task_id})
@@ -131,23 +143,3 @@ def get_task(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
 
     return serialize_task(task)
-
-# cancel a task
-@router.post("/{task_id}/cancel")
-def cancel_task(task_id: str, action: TaskAction):
-    try:
-        task = task_table.get_item(Key={"task_id": task_id}).get("Item")
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
-        if task["posted_by"] != action.user_id:
-            raise HTTPException(status_code=403, detail="Unauthorized to cancel this task")
-        
-        task_table.update_item(
-            Key={"task_id": task_id},
-            UpdateExpression="SET #status = :cancelled",
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={":cancelled": "cancelled"}
-        )
-        return {"message": "Task cancelled"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
