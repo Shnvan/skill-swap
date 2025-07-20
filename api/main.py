@@ -1,7 +1,6 @@
 # app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routes import users, ratings, reports
 import uvicorn
 from .routes import users, ratings, reports, task
 
@@ -13,12 +12,6 @@ app = FastAPI(
 
 
 # --------------------
-# ROUTERS
-# --------------------
-
-app.include_router(users.router)
-app.include_router(ratings.router)
-app.include_router(reports.router)
 
 
 # --------------------
