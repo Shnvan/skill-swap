@@ -3,20 +3,24 @@ from typing import List
 from uuid import uuid4
 from datetime import datetime
 from boto3.dynamodb.conditions import Key, Attr
-
-from api.models import RatingCreate, Rating  
+from api.models import RatingCreate, Rating
 from api.db import rating_table
 from fastapi import Depends
 from .auth import get_current_user
 
-
 router = APIRouter(prefix="/ratings", tags=["Ratings"])
-
 
 # Submit a rating
 @router.post("/", response_model=Rating)
 def create_rating(rating: RatingCreate, user_id: str = Depends(get_current_user)):
     try:
+        # Check if the user has already rated this task
+        existing_rating = rating_table.scan(
+            FilterExpression=Attr("from_user").eq(user_id) & Attr("to_user").eq(rating.to_user)
+        )
+        if existing_rating.get("Items"):
+            raise HTTPException(status_code=400, detail="You have already rated this user.")
+
         item = rating.dict()
         item["rating_id"] = str(uuid4())
         item["timestamp"] = datetime.utcnow().isoformat()
@@ -26,8 +30,6 @@ def create_rating(rating: RatingCreate, user_id: str = Depends(get_current_user)
         return item
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
 
 # Get ratings received by a user
 @router.get("/to/{user_id}", response_model=List[Rating])
@@ -40,18 +42,19 @@ def get_ratings_for_user(user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# Flag a rating
+# Flag a rating with reason
 @router.put("/{rating_id}/flag")
-def flag_rating(rating_id: str):
+def flag_rating(rating_id: str, reason: str = "Inappropriate content"):
     try:
         response = rating_table.get_item(Key={"rating_id": rating_id})
         item = response.get("Item")
         if not item:
             raise HTTPException(status_code=404, detail="Rating not found")
 
+        # Flag the rating with a reason
         item["is_flagged"] = True
+        item["flag_reason"] = reason  # Add reason for flagging
         rating_table.put_item(Item=item)
-        return {"message": "Rating flagged"}
+        return {"message": "Rating flagged", "reason": reason}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
