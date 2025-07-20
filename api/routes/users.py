@@ -5,7 +5,7 @@ from uuid import uuid4, UUID
 from boto3.dynamodb.conditions import Attr
 
 from api.db import user_table
-from api.models import UserCreate, UserUpdate, UserProfile
+from api.models import UserCreate, UserUpdate, UserProfile, PublicUser
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -37,7 +37,7 @@ def create_user(user: UserCreate):
 # -------------------------------
 # Get user by email
 # -------------------------------
-@router.get("/email/{email}", response_model=UserProfile)
+@router.get("/email/{email}", response_model=PublicUser)
 def get_user_by_email(email: str):
     try:
         email = email.lower()
@@ -74,7 +74,7 @@ def search_users(query: str):
 # -------------------------------
 # List all users or filter by skill
 # -------------------------------
-@router.get("/", response_model=List[UserProfile])
+@router.get("/", response_model=List[PublicUser])
 def list_users(skill: Optional[str] = None):
     try:
         if skill:
@@ -87,20 +87,6 @@ def list_users(skill: Optional[str] = None):
                 FilterExpression=Attr("is_active").eq(True)
             )
         return response.get("Items", [])
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# -------------------------------
-# Get user by ID (MUST COME LAST)
-# -------------------------------
-@router.get("/{user_id}", response_model=UserProfile)
-def get_user(user_id: UUID = Path(...)):
-    try:
-        response = user_table.get_item(Key={"id": str(user_id)})
-        item = response.get("Item")
-        if not item or not item.get("is_active", True):
-            raise HTTPException(status_code=404, detail="User not found")
-        return item
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

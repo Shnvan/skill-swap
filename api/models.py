@@ -12,22 +12,31 @@ class UserCreate(BaseModel):
     full_name: UserName
     email: EmailStr
     skill: UserSkill
-    bio: UserBio = None
+    bio: Optional[UserBio] = None
 
 class UserUpdate(BaseModel):
     full_name: Optional[UserName] = None
     skill: Optional[UserSkill] = None
     bio: UserBio = None
+    profile_image: Optional[str] = None
 
 class UserProfile(UserCreate):
     id: str
     is_active: bool
+    profile_image: Optional[str] = None 
+
+class PublicUser(BaseModel):
+    id: str
+    full_name: str
+    skill: Optional[str]
+    bio: Optional[str]
+
 
 # ---------- Rating ----------
 class RatingBase(BaseModel):
-    from_user: str
     to_user: str
-    rating: int = Field(ge=1, le=5)
+    task_id: str
+    rating: int = Field(..., ge=1, le=5)
     comment: Optional[str] = None
 
 class RatingCreate(RatingBase):
@@ -35,22 +44,29 @@ class RatingCreate(RatingBase):
 
 class Rating(RatingBase):
     rating_id: str
+    from_user: str
     timestamp: str
     is_flagged: Optional[bool] = False
+    flag_reason: Optional[str] = None
+    flagged_by: Optional[str] = None
+    flagged_at: Optional[str] = None
 
 # ---------- Report ----------
-class Report(BaseModel):
-    report_id: Optional[str] = None
-    reporter_id: str
-    reported_user_id: str
-    reason: str
-    timestamp: Optional[datetime] = None
-
+# For submitting a new report
 class ReportCreate(BaseModel):
-    from_user: str
-    to_user: str
+    to_user: str  # the user being reported
     reason: str
     details: str
+
+# For returning a report (in response)
+class Report(BaseModel):
+    report_id: str
+    from_user: str  # reporter
+    to_user: str    # reported user
+    reason: str
+    details: str
+    timestamp: datetime
+    is_resolved: Optional[bool] = False  # optional for future admin use
 
 # ---------- Task ----------
 class Task(BaseModel):
