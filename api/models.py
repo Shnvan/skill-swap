@@ -67,6 +67,7 @@ class Task(BaseModel):
     accepted_at: Optional[str] = None
     completed_at: Optional[str] = None
 
+
 class TaskCreate(BaseModel):
     title: str = Field(..., min_length=5, max_length=100, description="Short but descriptive title")
     description: str = Field(..., min_length=10, max_length=500, description="Explain the task clearly")
@@ -76,3 +77,18 @@ class TaskCreate(BaseModel):
 
 class TaskAction(BaseModel):
     user_id: str
+
+class TaskOut(BaseModel):
+    task_id: str
+    title: str
+    description: str
+    tags: List[str]
+    location: Optional[str]
+    time: Optional[str]
+    timestamp: str
+    status: str
+
+    posted_by: Optional[str] = None
+    accepted_by: Optional[str] = None
+    accepted_at: Optional[str] = None
+    completed_at: Optional[str] = None

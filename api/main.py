@@ -2,7 +2,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-from .routes import users, ratings, reports, task
+
+from api.routes import users, ratings, reports, task
 
 app = FastAPI(
     title="SkillSwap API",
@@ -20,6 +21,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # --------------------
 # INCLUDE ROUTERS
@@ -42,6 +44,3 @@ async def health_check():
 
 if __name__ == "__main__":
     uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=True)
-
-
-app.include_router(task.router, prefix="/tasks", tags=["Tasks"])
