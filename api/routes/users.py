@@ -54,7 +54,7 @@ def get_user_by_email(email: str):
 # -------------------------------
 # Search - IVAN PAAYOS NA LANG
 # -------------------------------
-@router.get("/search", response_model=List[UserProfile])
+@router.get("/search", response_model=List[PublicUser])
 def search_users(query: str):
     try:
         query = query.lower()
