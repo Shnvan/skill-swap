@@ -17,7 +17,7 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     full_name: Optional[UserName] = None
     skill: Optional[UserSkill] = None
-    bio: UserBio = None
+    bio: Optional[UserBio] = None
     profile_image: Optional[str] = None
 
 class UserProfile(UserCreate):
@@ -32,9 +32,11 @@ class PublicUser(BaseModel):
     bio: Optional[str]
 
 
+
+
 # ---------- Rating ----------
 class RatingBase(BaseModel):
-    to_user: str
+    to_user_id: str
     task_id: str
     rating: int = Field(..., ge=1, le=5)
     comment: Optional[str] = None
@@ -42,31 +44,30 @@ class RatingBase(BaseModel):
 class RatingCreate(RatingBase):
     pass
 
-class Rating(RatingBase):
+class RatingOut(RatingBase):
     rating_id: str
-    from_user: str
+    from_user_id: str
     timestamp: str
     is_flagged: Optional[bool] = False
     flag_reason: Optional[str] = None
     flagged_by: Optional[str] = None
     flagged_at: Optional[str] = None
 
-# ---------- Report ----------
-# For submitting a new report
-class ReportCreate(BaseModel):
-    to_user: str  # the user being reported
-    reason: str
-    details: str
 
-# For returning a report (in response)
-class Report(BaseModel):
-    report_id: str
-    from_user: str  # reporter
-    to_user: str    # reported user
+# ---------- Report ----------
+class ReportCreate(BaseModel):
+    task_id: str
+    to_user_id: str
     reason: str
-    details: str
-    timestamp: datetime
-    is_resolved: Optional[bool] = False  # optional for future admin use
+
+class ReportOut(BaseModel):
+    report_id: str
+    task_id: str
+    from_user_id: str
+    to_user_id: str
+    reason: str
+    created_at: str
+
 
 # ---------- Task ----------
 class Task(BaseModel):
@@ -82,7 +83,6 @@ class Task(BaseModel):
     accepted_by: Optional[str] = None
     accepted_at: Optional[str] = None
     completed_at: Optional[str] = None
-
 
 class TaskCreate(BaseModel):
     title: str = Field(..., min_length=5, max_length=100, description="Short but descriptive title")
@@ -103,7 +103,6 @@ class TaskOut(BaseModel):
     time: Optional[str]
     timestamp: str
     status: str
-
     posted_by: Optional[str] = None
     accepted_by: Optional[str] = None
     accepted_at: Optional[str] = None

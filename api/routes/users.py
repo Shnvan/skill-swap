@@ -1,67 +1,75 @@
-from fastapi import APIRouter, HTTPException, Path, Depends
+# ✅ users.py (fixed)
+
+import base64
+import json
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from typing import List, Optional, Union
-from uuid import uuid4, UUID
+from uuid import UUID
 from boto3.dynamodb.conditions import Attr
 
 from api.db import user_table
 from api.models import UserCreate, UserUpdate, UserProfile, PublicUser
-from .auth import get_current_user
+from api.routes.auth import get_current_user
 
-router = APIRouter(prefix="/users",tags=["Users"])
+router = APIRouter(prefix="/users", tags=["Users"])
 
-# -------------------------------
-# Create new user (Requires Auth)
-# -------------------------------
-@router.post("/", response_model=UserProfile)
-def create_user(user: UserCreate, user_auth=Depends(get_current_user)):
+# --- Helper to decode the page_token query string ---
+def decode_page_token(token: Optional[str]) -> Optional[dict]:
+    if not token:
+        return None
     try:
-        user_dict = user.dict()
-        user_dict["email"] = user_dict["email"].lower().strip()
-        user_dict["skill"] = user_dict["skill"].lower().strip()
-
-        existing = user_table.scan(
-            FilterExpression=Attr("email").eq(user_dict["email"])
-        )
-        if existing.get("Items"):
-            raise HTTPException(status_code=400, detail="Email already exists")
-
-        user_id = str(uuid4())
-        item = user_dict.copy()
-        item["id"] = user_id
-        item["is_active"] = True
-        user_table.put_item(Item=item)
-        return item
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error while creating user: {str(e)}")
-
+        decoded = base64.urlsafe_b64decode(token.encode()).decode()
+        return json.loads(decoded)
+    except Exception:
+        return None
 
 # -------------------------------
-# Get user by email
+# List all active users with optional skill filter
 # -------------------------------
-@router.get("/email/{email}", response_model=PublicUser)
-def get_user_by_email(email: str):
+@router.get("/", response_model=Union[List[PublicUser], dict])
+def list_users(
+    skill: Optional[str] = None,
+    limit: int = 10,
+    page_token: Optional[str] = None,
+    user=Depends(get_current_user)
+):
     try:
-        email = email.lower().strip()
-        response = user_table.scan(
-            FilterExpression=Attr("email").eq(email) & Attr("is_active").eq(True)
-        )
-        items = response.get("Items", [])
-        if not items:
-            raise HTTPException(status_code=404, detail="User not found")
-        return items[0]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error while retrieving user by email: {str(e)}")
+        filter_expr = Attr("is_active").eq(True)
+        if skill:
+            filter_expr &= Attr("skill").eq(skill.lower())
 
+        scan_args = {
+            "FilterExpression": filter_expr,
+            "Limit": limit,
+        }
+
+        page_start = decode_page_token(page_token)
+        if page_start:
+            scan_args["ExclusiveStartKey"] = page_start
+
+        response = user_table.scan(**scan_args)
+        next_page = response.get("LastEvaluatedKey")
+        encoded_page_token = (
+            base64.urlsafe_b64encode(json.dumps(next_page).encode()).decode()
+            if next_page else None
+        )
+
+        return {
+            "items": response.get("Items", []),
+            "next_page_token": encoded_page_token,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing users: {str(e)}")
 
 # -------------------------------
-# Search users (Requires Auth)
+# Search users by name or skill
 # -------------------------------
 @router.get("/search", response_model=Union[List[PublicUser], dict])
 def search_users(
     query: str,
     limit: int = 10,
-    page: Optional[dict] = None,
+    page_token: Optional[str] = None,
     user=Depends(get_current_user)
 ):
     try:
@@ -76,134 +84,130 @@ def search_users(
             "Limit": limit,
         }
 
-        if page:
-            scan_args["ExclusiveStartKey"] = page
+        page_start = decode_page_token(page_token)
+        if page_start:
+            scan_args["ExclusiveStartKey"] = page_start
 
         response = user_table.scan(**scan_args)
+        next_page = response.get("LastEvaluatedKey")
+        encoded_page_token = (
+            base64.urlsafe_b64encode(json.dumps(next_page).encode()).decode()
+            if next_page else None
+        )
+
         return {
             "items": response.get("Items", []),
-            "next_page": response.get("LastEvaluatedKey")
+            "next_page_token": encoded_page_token,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error while searching users: {str(e)}")
-
+        raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")
 
 # -------------------------------
-# List all users (Requires Auth)
+# Get own profile (secured)
 # -------------------------------
-@router.get("/", response_model=Union[List[PublicUser], dict])
-def list_users(
-    skill: Optional[str] = None,
-    limit: int = 10,
-    page: Optional[dict] = None,
-    user=Depends(get_current_user)
-):
+@router.get("/me", response_model=UserProfile)
+def get_own_profile(user=Depends(get_current_user)):
     try:
-        filter_expr = Attr("is_active").eq(True)
-        if skill:
-            filter_expr &= Attr("skill").eq(skill.lower())
-
-        scan_args = {
-            "FilterExpression": filter_expr,
-            "Limit": limit,
-        }
-
-        if page:
-            scan_args["ExclusiveStartKey"] = page
-
-        response = user_table.scan(**scan_args)
-        return {
-            "items": response.get("Items", []),
-            "next_page": response.get("LastEvaluatedKey")
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error while listing users: {str(e)}")
-
-
-# -------------------------------
-# Get user by ID
-# -------------------------------
-@router.get("/{user_id}", response_model=UserProfile)
-def get_user(user_id: UUID = Path(...)):
-    try:
-        response = user_table.get_item(Key={"id": str(user_id)})
-        item = response.get("Item")
-        if not item or not item.get("is_active", True):
-            raise HTTPException(status_code=404, detail="User not found")
-        return item
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error while retrieving user: {str(e)}")
-
-
-# -------------------------------
-# Update user (Requires Auth)
-# -------------------------------
-@router.patch("/{user_id}", response_model=UserProfile)
-def update_user(
-    updates: UserUpdate,
-    user_id: UUID = Path(...),
-    user=Depends(get_current_user)
-):
-    try:
-        if user_id != user["id"]:
-            raise HTTPException(status_code=403, detail="You can only update your own profile")
-
-        response = user_table.get_item(Key={"id": str(user_id)})
-        item = response.get("Item")
-        if not item or not item.get("is_active", True):
-            raise HTTPException(status_code=404, detail="User not found")
-
-        update_data = updates.dict(exclude_unset=True)
-        for key, value in update_data.items():
-            if isinstance(value, str):
-                value = value.strip()
-                if key in ["skill", "email", "full_name"]:
-                    value = value.lower()
-            item[key] = value
-
-        user_table.put_item(Item=item)
-        return item
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error while updating user: {str(e)}")
-
-
-# -------------------------------
-# Soft delete user (Requires Auth)
-# -------------------------------
-@router.delete("/{user_id}")
-def delete_user(user_id: UUID = Path(...), user=Depends(get_current_user)):
-    try:
-        if user_id != user["id"]:
-            raise HTTPException(status_code=403, detail="You can only deactivate your own profile")
-
-        response = user_table.get_item(Key={"id": str(user_id)})
+        user_id = user["id"]
+        response = user_table.get_item(Key={"id": user_id})
         item = response.get("Item")
         if not item:
             raise HTTPException(status_code=404, detail="User not found")
 
-        item["is_active"] = False
-        user_table.put_item(Item=item)
-        return JSONResponse(status_code=200, content={"message": "User deactivated"})
+        return item
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error while deleting user: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting profile: {str(e)}")
 
 
 # -------------------------------
-# Reactivate user (Requires Auth)
+# Create new user
 # -------------------------------
-@router.post("/{user_id}/reactivate", response_model=UserProfile)
-def reactivate_user(user_id: UUID = Path(...), user=Depends(get_current_user)):
+@router.post("/", response_model=UserProfile)
+def create_user(user_data: UserCreate, user=Depends(get_current_user)):
     try:
-        if user_id != user["id"]:
-            raise HTTPException(status_code=403, detail="You can only reactivate your own profile")
-
-        response = user_table.get_item(Key={"id": str(user_id)})
-        item = response.get("Item")
-        if not item:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        item["is_active"] = True
+        user_id = user["id"]
+        item = {
+            "id": user_id,
+            **user_data.dict(),
+            "is_active": True,
+        }
         user_table.put_item(Item=item)
         return item
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error while reactivating user: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating user: {str(e)}")
+
+# -------------------------------
+# Update user profile
+# -------------------------------
+@router.put("/", response_model=PublicUser)
+def update_user(payload: UserUpdate, user: dict = Depends(get_current_user)):
+    user_id = user["id"]  # ✅ Correctly extract ID from returned dict
+
+    try:
+        # Filter out None values
+        update_data = {k: v for k, v in payload.dict().items() if v is not None}
+
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No valid fields to update.")
+
+        # Construct UpdateExpression and AttributeValues
+        update_expr = "SET " + ", ".join(f"{k} = :{k}" for k in update_data)
+        expr_attr_values = {f":{k}": v for k, v in update_data.items()}
+
+        # Perform update
+        user_table.update_item(
+            Key={"id": user_id},
+            UpdateExpression=update_expr,
+            ExpressionAttributeValues=expr_attr_values
+        )
+
+        # Fetch and return the updated user
+        response = user_table.get_item(Key={"id": user_id})
+        if "Item" not in response:
+            raise HTTPException(status_code=404, detail="User not found after update.")
+
+        return response["Item"]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating user: {str(e)}")
+
+
+# -------------------------------
+# Reactivate user
+# -------------------------------
+@router.post("/{user_id}/reactivate")
+def reactivate_user(user_id: str, user=Depends(get_current_user)):
+    try:
+        response = user_table.get_item(Key={"id": user_id})
+        if "Item" not in response:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user_table.update_item(
+            Key={"id": user_id},
+            UpdateExpression="SET is_active = :val",
+            ExpressionAttributeValues={":val": True}
+        )
+
+        return {"message": "User reactivated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reactivating user: {str(e)}")
+
+
+
+# -------------------------------
+# Deactivate user
+# -------------------------------
+@router.delete("/", response_model=dict)
+def deactivate_user(user=Depends(get_current_user)):
+    try:
+        user_id = user["id"]
+        user_table.update_item(
+            Key={"id": user_id},
+            UpdateExpression="SET is_active = :false",
+            ExpressionAttributeValues={":false": False},
+        )
+        return {"message": "User deactivated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deactivating user: {str(e)}")
+
+

@@ -1,18 +1,14 @@
-from fastapi import Request, HTTPException
-from typing import Dict
+# api/routes/auth.py
+from fastapi import Request, Header, HTTPException
+from typing import Optional, Dict
 
-# Allows unauthenticated access for Swagger UI
-async def get_current_user(request: Request) -> Dict[str, str]:
-    if request.url.path.startswith("/docs") or request.url.path.startswith("/openapi.json"):
-        # Return a dummy user for Swagger UI testing
-        return {"id": "test-user-123"}
+# This allows Swagger to inject the user ID through headers or simulate it
+async def get_current_user(x_user_id: Optional[str] = Header(default="test-user-123")) -> Dict[str, str]:
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Missing x-user-id header")
+    return {"id": x_user_id}
 
-    user_id = request.headers.get("x-user-id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Missing or invalid authentication")
-    return {"id": user_id}
-
-# Convenience method that still supports Swagger UI
-async def get_current_user_id(request: Request) -> str:
-    user = await get_current_user(request)
-    return user["id"]
+async def get_current_user_id(x_user_id: Optional[str] = Header(default="test-user-123")) -> str:
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Missing x-user-id header")
+    return x_user_id

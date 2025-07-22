@@ -1,40 +1,44 @@
+# ✅ reports.py (fixed)
+
 from fastapi import APIRouter, HTTPException, Depends
 from uuid import uuid4
 from datetime import datetime
+from boto3.dynamodb.conditions import Attr
 from typing import List
 
-from boto3.dynamodb.conditions import Attr  # ✅ Missing import added
-from api.models import ReportCreate, Report
 from api.db import report_table
-from api.routes.auth import get_current_user
+from api.routes.auth import get_current_user_id
+from api.models import ReportCreate, ReportOut
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
-# Submit a report
-@router.post("/", response_model=Report)
-def submit_report(report: ReportCreate, user_id: str = Depends(get_current_user)):
-    if not report.reason or not report.details:
-        raise HTTPException(status_code=400, detail="Reason and details are required")
-
+# -------------------------------
+# Create a report
+# -------------------------------
+@router.post("/", response_model=ReportOut)
+def create_report(payload: ReportCreate, user_id: str = Depends(get_current_user_id)):
     try:
-        item = report.dict()
-        item["report_id"] = str(uuid4())
-        item["timestamp"] = datetime.utcnow().isoformat()
-        item["from_user"] = user_id
-        item["is_resolved"] = False  # Optional future field
-
+        report_id = str(uuid4())
+        item = {
+            "report_id": report_id,  # ✅ must match DynamoDB partition key
+            "task_id": payload.task_id,
+            "from_user_id": user_id,
+            "to_user_id": payload.to_user_id,
+            "reason": payload.reason,
+            "created_at": datetime.utcnow().isoformat(),
+        }
         report_table.put_item(Item=item)
         return item
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error creating report: {str(e)}")
 
-# View reports submitted by the current user
-@router.get("/", response_model=List[Report])
-def get_my_reports(user_id: str = Depends(get_current_user)):
+# -------------------------------
+# Get reports sent to the current user
+# -------------------------------
+@router.get("/me", response_model=List[ReportOut])
+def get_my_reports(user_id: str = Depends(get_current_user_id)):
     try:
-        response = report_table.scan(
-            FilterExpression=Attr("from_user").eq(user_id)
-        )
+        response = report_table.scan(FilterExpression=Attr("from_user_id").eq(user_id))
         return response.get("Items", [])
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error fetching your reports: {str(e)}")
