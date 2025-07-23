@@ -20,7 +20,7 @@ class RatingCreate(BaseModel): # Now optional
     comment: str
 
 class RatingOut(RatingCreate):
-    id: str
+    rating_id: str
     created_at: str
 
 # -------------------------------
@@ -60,7 +60,7 @@ async def create_rating(
         rating_table.put_item(Item=rating_item)
 
         return {
-            "id": rating_id,
+            "rating_id": rating_id,
             "from_user_id": from_user_id,
             "to_user_id": payload.to_user_id,
             "task_id": payload.task_id,
@@ -85,7 +85,7 @@ def get_ratings_for_user(user_id: str):
         items = response.get("Items", [])
         return [
             {
-                "id": item["rating_id"],
+                "rating_id": item["rating_id"],
                 "from_user_id": item["from_user"],
                 "to_user_id": item["to_user_id"],
                 "task_id": item["task_id"],
