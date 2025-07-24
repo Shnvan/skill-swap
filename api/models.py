@@ -31,9 +31,6 @@ class PublicUser(BaseModel):
     skill: Optional[str]
     bio: Optional[str]
 
-
-
-
 # ---------- Rating ----------
 class RatingBase(BaseModel):
     to_user_id: str
@@ -107,3 +104,4 @@ class TaskOut(BaseModel):
     accepted_by: Optional[str] = None
     accepted_at: Optional[str] = None
     completed_at: Optional[str] = None
+    completed_by: Optional[str] = None

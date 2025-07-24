@@ -1,9 +1,6 @@
-# ✅ users.py (fixed)
-
 import base64
 import json
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import JSONResponse
 from typing import List, Optional, Union
 from uuid import UUID
 from boto3.dynamodb.conditions import Attr
@@ -25,30 +22,42 @@ def decode_page_token(token: Optional[str]) -> Optional[dict]:
         return None
 
 # -------------------------------
-# List all active users with optional skill filter
+# List all active users with optional skill and full_name filter
 # -------------------------------
 @router.get("/", response_model=Union[List[PublicUser], dict])
 def list_users(
-    skill: Optional[str] = None,
+    query: Optional[str] = None,  # Single query input for name, full_name, or skill
     limit: int = 10,
     page_token: Optional[str] = None,
     user=Depends(get_current_user)
 ):
     try:
+        # Start with active users filter
         filter_expr = Attr("is_active").eq(True)
-        if skill:
-            filter_expr &= Attr("skill").eq(skill.lower())
 
+        if query:
+            # Match query with name, full_name, or skill (handling lowercase)
+            filter_expr &= (
+                Attr("name_lc").contains(query.lower()) |
+                Attr("full_name_lc").contains(query.lower()) |
+                Attr("skill_lc").contains(query.lower())
+            )
+
+        # Prepare scan arguments
         scan_args = {
             "FilterExpression": filter_expr,
             "Limit": limit,
         }
 
+        # Handle pagination
         page_start = decode_page_token(page_token)
         if page_start:
             scan_args["ExclusiveStartKey"] = page_start
 
+        # Perform the scan query
         response = user_table.scan(**scan_args)
+
+        # Prepare pagination for the next page if it exists
         next_page = response.get("LastEvaluatedKey")
         encoded_page_token = (
             base64.urlsafe_b64encode(json.dumps(next_page).encode()).decode()
@@ -59,6 +68,7 @@ def list_users(
             "items": response.get("Items", []),
             "next_page_token": encoded_page_token,
         }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error listing users: {str(e)}")
 
@@ -73,10 +83,10 @@ def search_users(
     user=Depends(get_current_user)
 ):
     try:
-        query = query.lower().strip()
+        query = query.lower().strip()  # Lowercase query for case-insensitive search
         filter_expr = (
             (Attr("is_active").eq(True)) &
-            (Attr("full_name").contains(query) | Attr("skill").contains(query))
+            (Attr("full_name_lc").contains(query) | Attr("skill_lc").contains(query))  # Search using lowercase fields
         )
 
         scan_args = {
@@ -88,7 +98,10 @@ def search_users(
         if page_start:
             scan_args["ExclusiveStartKey"] = page_start
 
+        # Perform the scan query
         response = user_table.scan(**scan_args)
+
+        # Prepare pagination for the next page if it exists
         next_page = response.get("LastEvaluatedKey")
         encoded_page_token = (
             base64.urlsafe_b64encode(json.dumps(next_page).encode()).decode()
@@ -118,58 +131,45 @@ def get_own_profile(user=Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting profile: {str(e)}")
 
-
 # -------------------------------
 # Create new user
 # -------------------------------
 @router.post("/", response_model=UserProfile)
 def create_user(user_data: UserCreate, user=Depends(get_current_user)):
     try:
+        # Check if the necessary fields are present
+        if not user_data.full_name or not user_data.skill or not user_data.email:
+            raise HTTPException(status_code=400, detail="Full name, skill, and email are required to create a user.")
+
         user_id = user["id"]
         item = {
             "id": user_id,
-            **user_data.dict(),
+            "full_name": user_data.full_name,
+            "skill": user_data.skill,
+            "full_name_lc": user_data.full_name.lower(),
+            "skill_lc": user_data.skill.lower(),
             "is_active": True,
+            "email": user_data.email  # Include the email in the inserted data
         }
-        user_table.put_item(Item=item)
-        return item
+
+        # Insert the item into DynamoDB
+        response = user_table.put_item(Item=item)
+        print(f"Item inserted into DynamoDB: {item}")  # For debugging
+
+        # Return the inserted user data with email included
+        return {
+            "id": user_id,
+            "full_name": user_data.full_name,
+            "skill": user_data.skill,
+            "full_name_lc": user_data.full_name.lower(),
+            "skill_lc": user_data.skill.lower(),
+            "is_active": True,
+            "email": user_data.email  # Make sure email is included in the response
+        }
+
     except Exception as e:
+        print(f"Error creating user: {e}")  # Log the error
         raise HTTPException(status_code=500, detail=f"Error creating user: {str(e)}")
-
-# -------------------------------
-# Update user profile
-# -------------------------------
-@router.put("/", response_model=PublicUser)
-def update_user(payload: UserUpdate, user: dict = Depends(get_current_user)):
-    user_id = user["id"]  # ✅ Correctly extract ID from returned dict
-
-    try:
-        # Filter out None values
-        update_data = {k: v for k, v in payload.dict().items() if v is not None}
-
-        if not update_data:
-            raise HTTPException(status_code=400, detail="No valid fields to update.")
-
-        # Construct UpdateExpression and AttributeValues
-        update_expr = "SET " + ", ".join(f"{k} = :{k}" for k in update_data)
-        expr_attr_values = {f":{k}": v for k, v in update_data.items()}
-
-        # Perform update
-        user_table.update_item(
-            Key={"id": user_id},
-            UpdateExpression=update_expr,
-            ExpressionAttributeValues=expr_attr_values
-        )
-
-        # Fetch and return the updated user
-        response = user_table.get_item(Key={"id": user_id})
-        if "Item" not in response:
-            raise HTTPException(status_code=404, detail="User not found after update.")
-
-        return response["Item"]
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error updating user: {str(e)}")
 
 
 # -------------------------------
@@ -189,10 +189,9 @@ def reactivate_user(user_id: str, user=Depends(get_current_user)):
         )
 
         return {"message": "User reactivated successfully"}
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reactivating user: {str(e)}")
-
-
 
 # -------------------------------
 # Deactivate user
@@ -207,7 +206,6 @@ def deactivate_user(user=Depends(get_current_user)):
             ExpressionAttributeValues={":false": False},
         )
         return {"message": "User deactivated"}
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deactivating user: {str(e)}")
-
-
